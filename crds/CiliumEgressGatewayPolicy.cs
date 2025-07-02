@@ -2,6 +2,8 @@ using k8s.Models;
 using KubeOps.Abstractions.Entities;
 using KubeOps.Abstractions.Entities.Attributes;
 
+namespace AgonesLoadBalancerWatcher;
+
 [KubernetesEntity(
     Group = "cilium.io",
     ApiVersion = "v2",

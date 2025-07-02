@@ -2,6 +2,8 @@ using System.Text.Json.Serialization;
 using k8s.Models;
 using KubeOps.Abstractions.Entities;
 
+namespace AgonesLoadBalancerWatcher;
+
 [KubernetesEntity(Group = "agones.dev", ApiVersion = "v1", Kind = "GameServer")]
 public class GameServer
     : CustomKubernetesEntity<GameServer.GameServerSpec, GameServer.GameServerStatus>

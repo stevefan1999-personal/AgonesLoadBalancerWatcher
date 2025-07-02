@@ -2,6 +2,8 @@ using k8s.Models;
 using KubeOps.Abstractions.Finalizer;
 using Microsoft.Extensions.Logging;
 
+namespace AgonesLoadBalancerWatcher;
+
 public class CiliumEgressGatewayPolicyFinalizer(ILogger<CiliumEgressGatewayPolicyFinalizer> _logger)
     : IEntityFinalizer<CiliumEgressGatewayPolicy>
 {

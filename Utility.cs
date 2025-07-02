@@ -2,6 +2,8 @@ using System.Net;
 using k8s;
 using k8s.Autorest;
 
+namespace AgonesLoadBalancerWatcher;
+
 public class Utility
 {
     public static async Task<bool> HandleTransientFailureAsStatus(
@@ -78,7 +80,7 @@ public class Utility
             }
 
             return (fetched, transacted);
-        retry:
+            retry:
             if (rollback != null)
             {
                 await rollback(fetched);
@@ -136,7 +138,7 @@ public class Utility
             }
 
             return fetched;
-        retry:
+            retry:
             if (rollback != null)
             {
                 await rollback(fetched);

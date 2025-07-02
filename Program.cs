@@ -1,4 +1,5 @@
-﻿using k8s.Models;
+﻿using AgonesLoadBalancerWatcher;
+using k8s.Models;
 using KubeOps.Operator;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -12,8 +13,31 @@ builder
     .Services.AddTransient<GameServerCiliumEgressGatewayPolicyFinalizer>()
     .AddTransient<CiliumEgressGatewayPolicyFinalizer>()
     .AddKubernetesOperator()
-    .AddController<V1ServiceController, V1Service>()
-    .AddController<CiliumEgressGatewayPolicyController, CiliumEgressGatewayPolicy>()
+    .AddController<
+        GameServerCreateV1ServiceController,
+        GameServer,
+        GameServerCreateV1ServiceController.LabelSelector
+    >()
+    .AddController<
+        GameServerEgressGatewayFinalizerController,
+        GameServer,
+        GameServerEgressGatewayFinalizerController.LabelSelector
+    >()
+    .AddController<
+        V1ServiceCreateCiliumEgressGatewayController,
+        V1Service,
+        V1ServiceCreateCiliumEgressGatewayController.LabelSelector
+    >()
+    .AddController<
+        V1ServiceLoadBalancerGameServerUpdateController,
+        V1Service,
+        V1ServiceLoadBalancerGameServerUpdateController.LabelSelector
+    >()
+    .AddController<
+        CiliumEgressGatewayPolicyController,
+        CiliumEgressGatewayPolicy,
+        CiliumEgressGatewayPolicyController.LabelSelector
+    >()
     .AddFinalizer<GameServerCiliumEgressGatewayPolicyFinalizer, GameServer>(
         GameServerEgressGatewayPolicyExtension.CiliumEgressGatewayPolicyFinalizerKey
     )
