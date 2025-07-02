@@ -2,12 +2,19 @@ using k8s.Models;
 using KubeOps.Abstractions.Entities;
 using KubeOps.Abstractions.Entities.Attributes;
 
-[KubernetesEntity(Group = "cilium.io", ApiVersion = "v2", Kind = "CiliumEgressGatewayPolicy", PluralName = "ciliumegressgatewaypolicies")]
+[KubernetesEntity(
+    Group = "cilium.io",
+    ApiVersion = "v2",
+    Kind = "CiliumEgressGatewayPolicy",
+    PluralName = "ciliumegressgatewaypolicies"
+)]
 [EntityScope(EntityScope.Cluster)]
-public class CiliumEgressGatewayPolicy :
-    CustomKubernetesEntity<CiliumEgressGatewayPolicy.CiliumEgressGatewayPolicySpec>
+public class CiliumEgressGatewayPolicy
+    : CustomKubernetesEntity<CiliumEgressGatewayPolicy.CiliumEgressGatewayPolicySpec>
 {
-    public override string ToString() => $"CiliumEgressGatewayPolicyEntity {{ Spec = {Spec}, Metadata = {{ Name = {Metadata.Name}, Namespace = {Metadata.NamespaceProperty}, Uid = {Metadata.Uid} }} }}";
+    public override string ToString() =>
+        $"CiliumEgressGatewayPolicyEntity {{ Spec = {Spec}, Metadata = {{ Name = {Metadata.Name}, Namespace = {Metadata.NamespaceProperty}, Uid = {Metadata.Uid} }} }}";
+
     public record CiliumEgressGatewayPolicySpec
     {
         public IList<EgressRule> Selectors { get; set; } = [];

@@ -3,14 +3,16 @@ using k8s.Models;
 using KubeOps.Abstractions.Entities;
 
 [KubernetesEntity(Group = "agones.dev", ApiVersion = "v1", Kind = "GameServer")]
-public class GameServer :
-    CustomKubernetesEntity<GameServer.GameServerSpec, GameServer.GameServerStatus>
+public class GameServer
+    : CustomKubernetesEntity<GameServer.GameServerSpec, GameServer.GameServerStatus>
 {
-    public override string ToString() => $"GameServer {{ Spec = {Spec}, Status = {Status}, Metadata = {{ Name = {Metadata.Name}, Namespace = {Metadata.NamespaceProperty}, Uid = {Metadata.Uid} }} }}";
+    public override string ToString() =>
+        $"GameServer {{ Spec = {Spec}, Status = {Status}, Metadata = {{ Name = {Metadata.Name}, Namespace = {Metadata.NamespaceProperty}, Uid = {Metadata.Uid} }} }}";
 
     public record GameServerSpec
     {
         public override string ToString() => $"Ports = {string.Join(", ", Ports)}";
+
         public string? Container { get; set; } = string.Empty;
         public IList<GameServerPort>? Ports { get; set; } = [];
         public Health? Health { get; set; } = new();
@@ -23,15 +25,16 @@ public class GameServer :
         public Eviction? Eviction { get; set; }
     }
 
-
     public record PlayersSpec
     {
         public long? InitialCapacity { get; set; }
     }
+
     public record Eviction
     {
         public string? Safe { get; set; } = string.Empty;
     }
+
     public record Health
     {
         public bool? Disabled { get; set; }
@@ -39,11 +42,12 @@ public class GameServer :
         public int? FailureThreshold { get; set; }
         public int? InitialDelaySeconds { get; set; }
     }
+
     public record GameServerPort
     {
         public string? Container { get; set; } = string.Empty;
-        public int ContainerPort { get; set; } = 0;
-        public int HostPort { get; set; } = 0;
+        public int? ContainerPort { get; set; }
+        public int? HostPort { get; set; }
         public string? Name { get; set; } = string.Empty;
         public string? PortPolicy { get; set; } = string.Empty;
         public string? Protocol { get; set; } = string.Empty;
@@ -53,8 +57,10 @@ public class GameServer :
     public record SdkServer
     {
         public string? LogLevel { get; set; } = string.Empty;
+
         [JsonPropertyName("grpcPort")]
         public int? GRPCPort { get; set; } = 0;
+
         [JsonPropertyName("httpPort")]
         public int? HTTPPort { get; set; } = 0;
     }
@@ -78,10 +84,12 @@ public class GameServer :
         public string? Name { get; set; } = string.Empty;
         public int? Port { get; set; }
     }
+
     public record PlayerStatus
     {
         public long? Count { get; set; }
         public long? Capacity { get; set; }
+
         [JsonPropertyName("ids")]
         public IList<string>? IDs { get; set; } = [];
     }
@@ -91,6 +99,7 @@ public class GameServer :
         public long? Count { get; set; }
         public long? Capacity { get; set; }
     }
+
     public record ListStatus
     {
         public long? Capacity { get; set; }

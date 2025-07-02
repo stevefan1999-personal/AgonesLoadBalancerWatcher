@@ -1,7 +1,5 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Net;
-using k8s;
-using k8s.Autorest;
 using k8s.Models;
 using KubeOps.Abstractions.Controller;
 using KubeOps.Abstractions.Entities;
@@ -11,9 +9,12 @@ using KubeOps.KubernetesClient;
 using Microsoft.Extensions.Logging;
 
 [EntityRbac(typeof(GameServer), Verbs = RbacVerb.All)]
-public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernetesClient _client, EntityRequeue<V1Service> _requeue) : IEntityController<V1Service>
+public class V1ServiceController(
+    ILogger<V1ServiceController> _logger,
+    IKubernetesClient _client,
+    EntityRequeue<V1Service> _requeue
+) : IEntityController<V1Service>
 {
-
     public Task DeletedAsync(V1Service service, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
@@ -21,14 +22,13 @@ public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernet
 
     public async Task ReconcileAsync(V1Service service, CancellationToken cancellationToken)
     {
-        if (!service.IsCiliumLoadBalancerManaged())
+        if (!service.IsCiliumLoadBalancerManagedFromLabels())
         {
-            _logger.LogDebug("Service {Entity} does not contain load balancer enabled label, skipping", service.Name());
+            _logger.LogDebug(
+                "Service {Entity} does not contain load balancer enabled label, skipping",
+                service.Name()
+            );
             return;
-        }
-        else
-        {
-            _requeue(service, TimeSpan.FromSeconds(10));
         }
 
         if (service.Spec.Type != "LoadBalancer")
@@ -37,97 +37,106 @@ public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernet
             return;
         }
 
-        var loadBalancerIps = service.Status.LoadBalancer?.Ingress?.Select(x => x.Ip) ?? [];
-        if (!loadBalancerIps.Any())
+        var loadBalancerIps = (
+            service.Status.LoadBalancer?.Ingress?.Select(x => x.Ip) ?? []
+        ).ToImmutableSortedSet();
+        if (loadBalancerIps.IsEmpty)
         {
-            _logger.LogDebug("Service {Entity} does not contain any allocated external LB IP address, skipping", service.Name());
+            _logger.LogDebug(
+                "Service {Entity} does not contain any allocated external LB IP address, skipping",
+                service.Name()
+            );
             return;
-        }
-
-        if (loadBalancerIps.Count() != 1)
-        {
-            _logger.LogWarning("Service {Entity} contains more than one external LB IP address, will use first one that was valid as default", service.Name());
         }
 
         var owner = service.OwnerReferences()?.Where(x => x.Kind == "GameServer").FirstOrDefault();
         if (owner == null)
         {
-            _logger.LogDebug("Service {Entity} does not have a valid owner reference, skipping", service.Name());
+            _logger.LogDebug(
+                "Service {Entity} does not have a valid owner reference, skipping",
+                service.Name()
+            );
             return;
         }
 
-        async Task PopulateLoadBalancerAddress()
+        var gameServer = await _client.GetAsync<GameServer>(
+            owner.Name,
+            service.Namespace(),
+            cancellationToken
+        );
+        if (gameServer == null)
         {
-            var gameServer = await _client.GetAsync<GameServer>(owner.Name, service.Namespace(), cancellationToken) ?? throw new UnreachableException();
-            if (gameServer == null)
-            {
-                _logger.LogDebug("Service {Entity} does not have a valid game server, skipping", service.Name());
-                return;
-            }
-            for (; ; )
-            {
-                try
-                {
-                    gameServer = await _client.GetAsync<GameServer>(gameServer.Name(), gameServer.Namespace(), cancellationToken) ?? throw new UnreachableException();
-                    if (gameServer.Status?.Addresses == null)
-                    {
-                        throw new UnreachableException();
-                    }
-
-                    if (gameServer.Status.Addresses.Count <= 0)
-                    {
-                        continue;
-                    }
-
-                    var shouldUpdate = false;
-
-                    foreach (var address in loadBalancerIps)
-                    {
-                        if (!gameServer.Status.Addresses.Any(x => x.Address == address))
-                        {
-                            gameServer.Status.Addresses.Add(new() { Address = address, Type = "LoadBalancer" });
-                            shouldUpdate = true;
-                        }
-                    }
-
-
-                    if (shouldUpdate)
-                    {
-                        await _client.UpdateAsync((GameServer)gameServer, cancellationToken);
-                        _logger.LogDebug("Service {Entity} updated for {GameServer}", service.Name(), gameServer.Name());
-                    }
-
-                    return;
-                }
-                catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict || ex.Response.Content.Contains("leader changed"))
-                {
-                    continue;
-                }
-                catch (KubernetesException ex) when (ex.Status.Code == (int)HttpStatusCode.Gone)
-                {
-                    continue;
-                }
-
-            }
+            _logger.LogDebug("Service {Entity} owner was dead, ignoring", service.Name());
+            // await _client.DeleteAsync(service, cancellationToken);
+            return;
         }
+
+        Task PopulateLoadBalancerAddress() =>
+            Utility.ReadModifyWrite(
+                fetch: async () =>
+                {
+                    var gameServer = await _client.GetAsync<GameServer>(
+                        owner.Name,
+                        service.Namespace(),
+                        cancellationToken
+                    );
+                    return gameServer?.Status?.Addresses?.Count switch
+                    {
+                        <= 0 => null,
+                        _ => gameServer
+                    };
+                },
+                transact: async (gameServer) =>
+                {
+                    var existingLoadBalancersAddresses = (gameServer!.Status.Addresses ?? [])
+                        .Where(address => address.Type == "LoadBalancer")
+                        .Select(addr => addr.Address)
+                        .ToImmutableSortedSet();
+
+                    if (existingLoadBalancersAddresses != loadBalancerIps)
+                    {
+                        gameServer.Status.Addresses = (gameServer.Status.Addresses ?? [])
+                            .Where(address => address.Type != "LoadBalancer")
+                            .Concat(
+                                loadBalancerIps.Select(
+                                    ip =>
+                                        new V1NodeAddress() { Type = "LoadBalancer", Address = ip }
+                                )
+                            )
+                            .ToList();
+                        await _client.UpdateAsync(gameServer, cancellationToken);
+                        _logger.LogDebug(
+                            "Service {Entity} updated for {GameServer}",
+                            service.Name(),
+                            gameServer.Name()
+                        );
+                    }
+                },
+                cancellationToken: cancellationToken
+            );
 
         async Task AddCiliumEgressEntry()
         {
-            var gameServer = await _client.GetAsync<GameServer>(owner.Name, service.Namespace(), cancellationToken);
-            if (gameServer == null)
-            {
-                _logger.LogDebug("Service {Entity} does not have a valid game server, skipping", service.Name());
-                return;
-            }
-
             var nodes = await _client.ListAsync<V1Node>(cancellationToken: cancellationToken);
 
-            var eligibleNodesWithLoadBalancerIp =
+            var eligibleNodesWithLoadBalancerIp = (
                 from node in nodes
                 from address in node.Status.Addresses
                 join loadBalancerIp in loadBalancerIps on address.Address equals loadBalancerIp
                 select new { node, address }
-            ;
+            )
+                .Concat(
+                    from node in nodes
+                    from address in node.GetAnnotation("k0sproject.io/node-ip-external")?.Split(',')
+                        ?? []
+                    join loadBalancerIp in loadBalancerIps on address equals loadBalancerIp
+                    select new
+                    {
+                        node,
+                        address = new V1NodeAddress { Type = "ExternalIP", Address = address }
+                    }
+                )
+                .ToImmutableSortedSet();
 
             (V1Node node, V1NodeAddress address)? GetLoadBalancerAssociatedIP(string type)
             {
@@ -136,13 +145,7 @@ public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernet
 
                 if (count == 0)
                 {
-                    _logger.LogWarning($"No {type} detected on the nodes with the associated load balancer");
                     return null;
-                }
-
-                if (count != 1)
-                {
-                    _logger.LogWarning($"More than one {type} detected on the nodes with the associated load balancer IP, using the first one as a default");
                 }
 
                 var value = ips.FirstOrDefault();
@@ -154,49 +157,70 @@ public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernet
                 };
             }
 
+            var name =
+                gameServer.GetCiliumEgressGatewayPolicyGeneratedName()
+                ?? throw new UnreachableException();
 
-            var name = gameServer.GetCiliumEgressGatewayPolicyGeneratedName() ?? throw new UnreachableException();
-
-            for (; ; )
-            {
-                try
+            var bestNodeInfo =
+                GetLoadBalancerAssociatedIP("ExternalIP")
+                ?? GetLoadBalancerAssociatedIP("InternalIP");
+            await Utility.ReadModifyWrite(
+                fetch: () =>
+                    _client.GetAsync<CiliumEgressGatewayPolicy>(
+                        name,
+                        cancellationToken: cancellationToken
+                    ),
+                admitNullForFetchResult: true,
+                transact: async (egressGatewayPolicy) =>
                 {
-                    var egressGatewayPolicy = await _client.GetAsync<CiliumEgressGatewayPolicy>(name, cancellationToken: cancellationToken);
-
                     if (egressGatewayPolicy?.IsManagedFromAnnotation() ?? false)
                     {
-                        break;
+                        return;
                     }
 
-                    egressGatewayPolicy = new CiliumEgressGatewayPolicy();
+                    if (bestNodeInfo == null)
+                    {
+                        _logger.LogError(
+                            "No node has neither any ExternalIPs nor any InternalIPs associated with load balancer IPs {LoadBalancerAddress}, skipping",
+                            string.Join(", ", loadBalancerIps)
+                        );
+                        return;
+                    }
 
-                    // Why?
-                    egressGatewayPolicy.Kind = "CiliumEgressGatewayPolicy";
-                    egressGatewayPolicy.ApiVersion = "cilium.io/v2";
+                    if (loadBalancerIps.Count != 1)
+                    {
+                        _logger.LogWarning(
+                            "Service {Entity} contains more than one external LB IP address, will use first one that was valid as default for egress",
+                            service.Name()
+                        );
+                    }
+
+                    egressGatewayPolicy = new CiliumEgressGatewayPolicy
+                    {
+                        // Why?
+                        Kind = "CiliumEgressGatewayPolicy",
+                        ApiVersion = "cilium.io/v2"
+                    };
                     egressGatewayPolicy.Metadata ??= new();
                     egressGatewayPolicy.Metadata.Name = name;
-                    egressGatewayPolicy.Metadata.OwnerReferences = [
+                    egressGatewayPolicy.Metadata.OwnerReferences =
+                    [
                         gameServer.MakeOwnerReference(),
                         service.MakeOwnerReference(),
                     ];
                     egressGatewayPolicy.Metadata.Annotations = new Dictionary<string, string>
                     {
                         [CiliumEgressGatewayPolicyExtension.IsManagedKey] = "true",
-                        [CiliumEgressGatewayPolicyExtension.GameServerReferenceKey] = $"{gameServer.Namespace()}/{gameServer.Name()}",
-                        [CiliumEgressGatewayPolicyExtension.ServiceReferenceKey] = $"{service.Namespace()}/{service.Name()}",
+                        [CiliumEgressGatewayPolicyExtension.GameServerReferenceKey] =
+                            $"{gameServer.Namespace()}/{gameServer.Name()}",
+                        [CiliumEgressGatewayPolicyExtension.ServiceReferenceKey] =
+                            $"{service.Namespace()}/{service.Name()}",
                     };
 
                     egressGatewayPolicy.Spec ??= new();
                     egressGatewayPolicy.Spec.DestinationCIDRs = ["0.0.0.0/0"];
 
                     egressGatewayPolicy.Spec.EgressGateway ??= new();
-
-                    var bestNodeInfo = GetLoadBalancerAssociatedIP("ExternalIP") ?? GetLoadBalancerAssociatedIP("InternalIP");
-                    if (bestNodeInfo == null)
-                    {
-                        _logger.LogError("No node has neither any ExternalIPs nor any InternalIPs associated with load balancer IPs {LoadBalancerAddress}, skipping", string.Join(", ", loadBalancerIps));
-                        return;
-                    }
 
                     var (bestNode, bestAddress) = bestNodeInfo.Value;
                     egressGatewayPolicy.Spec.EgressGateway.EgressIP = bestAddress.Address;
@@ -208,7 +232,8 @@ public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernet
                         }
                     };
 
-                    egressGatewayPolicy.Spec.Selectors = [
+                    egressGatewayPolicy.Spec.Selectors =
+                    [
                         new()
                         {
                             PodSelector = new()
@@ -225,32 +250,41 @@ public class V1ServiceController(ILogger<V1ServiceController> _logger, IKubernet
                     egressGatewayPolicy.AttachCiliumEgressGatewayPolicyFinalizer();
 
                     await _client.SaveAsync(egressGatewayPolicy, cancellationToken);
-                    _logger.LogInformation("Created egress gateway policy for game server {GameServer}", gameServer.Name());
-                    break;
-                }
-                catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict || ex.Response.Content.Contains("leader changed"))
-                {
-                    continue;
-                }
-                catch (KubernetesException ex) when (ex.Status.Code == (int)HttpStatusCode.Gone)
-                {
-                    continue;
-                }
-            }
+                    _logger.LogInformation(
+                        "Created egress gateway policy for game server {GameServer}",
+                        gameServer.Name()
+                    );
+                },
+                cancellationToken: cancellationToken
+            );
         }
 
-        List<Task> tasks = [PopulateLoadBalancerAddress().WaitAsync(cancellationToken)];
+        List<Task> tasks =
+        [
+            Task.Run(PopulateLoadBalancerAddress, cancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken)
+        ];
 
-        var gameServer = await _client.GetAsync<GameServer>(owner.Name, service.Namespace(), cancellationToken) ?? throw new UnreachableException();
         if (gameServer.IsCiliumEgressGatewayPolicyEnabledFromAnnotation())
         {
-            tasks.Add(AddCiliumEgressEntry().WaitAsync(cancellationToken));
+            tasks.Add(
+                Task.Run(AddCiliumEgressEntry, cancellationToken)
+                    .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken)
+            );
         }
         else
         {
-            _logger.LogDebug("Cilium Egress Gateway Policy is not enabled for GameServer {Entity}.", gameServer.Name());
+            _logger.LogDebug(
+                "Cilium Egress Gateway Policy is not enabled for GameServer {Entity}.",
+                gameServer.Name()
+            );
         }
 
-        var _ = Task.Run(() => Task.WhenAll(tasks).WaitAsync(cancellationToken), cancellationToken).WaitAsync(cancellationToken);
+        var _ = Task.Run(
+            () => Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken),
+            cancellationToken
+        );
+        _requeue(service, TimeSpan.FromSeconds(15));
+        return;
     }
 }
