@@ -5,6 +5,15 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <IsPublishable>true</IsPublishable>
+    <EnableSdkContainerSupport>true</EnableSdkContainerSupport>
+    <RuntimeIdentifiers>win-x64;linux-musl-x64;linux-musl-arm64</RuntimeIdentifiers>
+    <ContainerRuntimeIdentifiers>linux-musl-x64;linux-musl-arm64</ContainerRuntimeIdentifiers>
+    <ContainerFamily>alpine</ContainerFamily>
+    <SelfContained>true</SelfContained>
+    <ContainerRegistry>ghcr.io</ContainerRegistry>
+    <ContainerRepository>stevefan1999-personal/AgonesLoadBalancerWatcher</ContainerRepository>
   </PropertyGroup>
 
   <ItemGroup>
